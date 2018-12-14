@@ -33,6 +33,28 @@
 #endif
 uint8_t bluetooth_stack_heap[DEFAULT_BLUETOOTH_HEAP(MAX_CONNECTIONS)];
 
+
+//bb b9 9e 70-ff f7-46 cf-ab c7-2d 32 c7 18 20 f2
+
+/* UUIDs for the demo service and characteristics */
+const uint8_t serviceUUID[] = {
+		0xf2,
+		0x20,
+		0x18,
+		0xc7,
+		0x32,
+		0x2d,
+		0xc7,
+		0xab,
+		0xcf,
+		0x46,
+		0xf7,
+		0xFF,
+		0x70,
+		0x9e,
+		0xb9,
+		0xbb };
+
 /* ---- Application macros ---- */
 
 /* GENERAL MACROS */
@@ -95,6 +117,8 @@ uint8_t bluetooth_stack_heap[DEFAULT_BLUETOOTH_HEAP(MAX_CONNECTIONS)];
 #endif
 
 
+static bool roleIsSlave = false; 				// Flag to check if role is slave or master (based on PB0 being pressed or not during boot)
+
 uint32_t time_elapsed;									// Variable to calculate time during which there was data tranmission
 const uint8_t displayRefreshOn = 1;						// Turn ON display refresh on master side
 const uint8_t displayRefreshOff = 0;					// Turn OFF display refresh on master side
@@ -108,7 +132,7 @@ uint16_t phyInUse = PHY_1M;								// Variable to hold the PHY in use
 uint16_t phyToUse = 0;									// Variable to hold the next PHY to use when changing to and from LE Coded Phy
 bool notifications_enabled = false; 					// Flag to check if notifications are enabled or not
 bool indications_enabled = false; 						// Flag to check if indications are enabled or not
-static bool roleIsSlave = true; 										// Flag to check if role is slave or master (based on PB0 being pressed or not during boot)
+
 bool sendNotifications = false; 						// Flag to trigger sending of notifications
 bool sendIndications = false; 							// Flag to trigger sending of indications
 bool sendWriteNoResponse = false;						// Flag to trigger sending of write no response
@@ -150,6 +174,7 @@ char* indicateString = (char*)indicateDisabledString;
 
 // App booted flag
 static bool appBooted = false;
+static bool Scanning = false;
 
 /**************************************************************************//**
 * @brief Routine to refresh the info on the display based on the Bluetooth link status
@@ -159,31 +184,37 @@ void displayRefresh()
 	static uint32 counter;
 
 	//GRAPHICS_Clear();
-	printf("\e[2J");
 
-	printf("%s\n",roleString);
-	printf("%s\n",statusString);
-	printf("%s\n",connIntervalString);
-	printf("%s\n",pduSizeString);
-	printf("%s\n",mtuSizeString);
-	printf("%s\n",maxDataSizeNotificationsString);
-	printf("%s\n",phyInUseString);
-	printf("%s\n",notifyString);
-	printf("%s\n",indicateString);
-	sprintf(throughputString+4, "%07lu", (unsigned long)throughput);
-	  throughputString[11] = ' ';
-	  throughputString[12] = 'b';
-	  throughputString[13] = 'p';
-	  throughputString[14] = 's';
-	printf("%s\n",throughputString);
-		printf("Counter: %d\n", counter++ );
-/*
-	sprintf(operationCountString+5, "%09lu", (unsigned long)operationCount);
-	printf("%s\n",operationCountString);
-	//sprintf(invalidDataString+8, "%04u", invalidData);
-	//GRAPHICS_AppendString(invalidDataString);
+	if (Scanning==0)
+	{
+		printf("\e[2J");
 
-//	GRAPHICS_Update();*/
+		printf("%s\n",roleString);
+		printf("%s\n",statusString);
+		printf("%s\n",connIntervalString);
+		printf("%s\n",pduSizeString);
+		printf("%s\n",mtuSizeString);
+		printf("%s\n",maxDataSizeNotificationsString);
+		printf("%s\n",phyInUseString);
+		printf("%s\n",notifyString);
+		printf("%s\n",indicateString);
+		sprintf(throughputString+4, "%07lu", (unsigned long)throughput);
+			throughputString[11] = ' ';
+			throughputString[12] = 'b';
+			throughputString[13] = 'p';
+			throughputString[14] = 's';
+		printf("%s\n",throughputString);
+			printf("Counter: %d\n", counter++ );
+	/*
+		sprintf(operationCountString+5, "%09lu", (unsigned long)operationCount);
+		printf("%s\n",operationCountString);
+		//sprintf(invalidDataString+8, "%04u", invalidData);
+		//GRAPHICS_AppendString(invalidDataString);
+
+	//	GRAPHICS_Update();*/
+	}
+
+
 }
 
 uint32_t RTCC_CounterGet(void)
@@ -222,6 +253,9 @@ void generate_data_indications(void){
 /**************************************************************************//**
 * @brief Processes advertisement packets looking for "Throughput Tester" device name
 *****************************************************************************/
+
+
+#if 1
 int process_scan_response(struct gecko_msg_le_gap_scan_response_evt_t *pResp)
 {
 	/* Decoding advertising packets is done here. The list of AD types can be found
@@ -255,7 +289,40 @@ int process_scan_response(struct gecko_msg_le_gap_scan_response_evt_t *pResp)
 
     return(ad_match_found);
 }
+#else
 
+int process_scan_response(struct gecko_msg_le_gap_scan_response_evt_t *pResp) {
+	// decoding advertising packets is done here. The list of AD types can be found
+	// at: https://www.bluetooth.com/specifications/assigned-numbers/Generic-Access-Profile
+
+	uint8_t i = 0;
+	uint8_t ad_match_found = 0;
+	uint8_t ad_len;
+	uint8_t ad_type;
+
+	while (i < (pResp->data.len - 1)) {
+
+		ad_len = pResp->data.data[i];
+		ad_type = pResp->data.data[i + 1];
+
+		if (ad_type == 0x07 || ad_type == 0x06) {
+			// type 0x06 = More 128-bit UUIDs available
+			// type 0x07 = Complete list of 128-bit UUIDs available
+
+			// note: this check assumes that the service we are looking for is first
+			// in the list. To be fixed so that there is no such limitation...
+			if (!memcmp(pResp->data.data + i + 2, serviceUUID, 16)) {
+				ad_match_found = 1;
+				break;
+			}
+		}
+
+		//jump to next AD record
+		i = i + ad_len + 1;
+	}
+	return (ad_match_found);
+}
+#endif
 /**************************************************************************//**
 * @brief Does a few things before initiating data transmissions. Read RTCC, disable
 * display refresh in master side and turn ON LED indicating data transmission
@@ -425,6 +492,7 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
   			gecko_cmd_le_gap_set_scan_parameters(SCAN_INTERVAL, SCAN_WINDOW, ACTIVE_SCANNING);
 
   			gecko_cmd_le_gap_discover(le_gap_discover_generic);
+				Scanning = 1;
   		}
 
   		gecko_cmd_hardware_set_soft_timer(32768, SOFT_TIMER_DISPLAY_REFRESH_HANDLE, 0);
@@ -432,13 +500,38 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 
       break;
 
+			case gecko_evt_le_gap_scan_response_id:
 
+			#if 0
+							printf("address ---> ");
+							for(uint8_t i=0; i< 6; i++) {
+								printf("0x%02x ", evt->data.evt_le_gap_scan_response.address.addr[i]);
+							}
+							printf(" ---- ");
+							printf("advertisement packet --> ");
+							for(uint8_t i=0; i< evt->data.evt_le_gap_scan_response.data.len; i++) {
+								printf("0x%02x ", evt->data.evt_le_gap_scan_response.data.data[i]);
+							}
+							printf("\r\n");
+			#endif
+							// process scan responses: this function returns 1 if we found the service we are looking for
+							if (process_scan_response(&(evt->data.evt_le_gap_scan_response)) > 0) {
+								struct gecko_msg_le_gap_open_rsp_t *pResp;
+								// match found -> stop discovery and try to connect
+								gecko_cmd_le_gap_end_procedure();
+								printf("OK --- >Device found, connecting.\r\n");
+								Scanning = 0;
+								pResp = gecko_cmd_le_gap_open(evt->data.evt_le_gap_scan_response.address, evt->data.evt_le_gap_scan_response.address_type);
+								// make copy of connection handle for later use (for example, to cancel the connection attempt)
+								//connHandle = pResp->connection;
+							}
+					break;
 
-            case gecko_evt_le_connection_opened_id:
+      case gecko_evt_le_connection_opened_id:
 
-            printf("Connection Opened\n");
+      printf("Connection Opened\n");
 
-          	  break;
+    	  break;
 
             case gecko_evt_le_connection_closed_id:
 
