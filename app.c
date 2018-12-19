@@ -205,13 +205,13 @@ void displayRefresh()
 			throughputString[14] = 's';
 		printf("%s\n",throughputString);
 			printf("Counter: %d\n", counter++ );
-	/*
-		sprintf(operationCountString+5, "%09lu", (unsigned long)operationCount);
+
+		//sprintf(operationCountString+5, "%09lu", operationCount);
 		printf("%s\n",operationCountString);
 		//sprintf(invalidDataString+8, "%04u", invalidData);
 		//GRAPHICS_AppendString(invalidDataString);
 
-	//	GRAPHICS_Update();*/
+	//	GRAPHICS_Update();
 	}
 
 
@@ -397,7 +397,7 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 #if 1
   if(notifications_enabled && sendNotifications)
      {
-     	evt = gecko_peek_event();
+    // 	evt = gecko_peek_event();
 
      	if(gecko_cmd_gatt_server_send_characteristic_notification(connection, gattdb_throughput_notifications, maxDataSizeNotifications, throughput_array_notifications)->result == 0)
  		{
@@ -417,7 +417,7 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 
      else if(sendWriteNoResponse)
      {
-     	evt = gecko_peek_event();
+     	//evt = gecko_peek_event();
 
      	if(gecko_cmd_gatt_write_characteristic_value_without_response(connection, gattdb_throughput_write_no_response, maxDataSizeNotifications, throughput_array_notifications)->result == 0)
  		{
@@ -437,7 +437,7 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 	else
 	{
 	 /* Check for stack event. */
-	 evt = gecko_wait_event();
+	// evt = gecko_wait_event();
  }
 	#endif
 

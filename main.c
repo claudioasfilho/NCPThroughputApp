@@ -88,11 +88,13 @@ int main(int argc, char* argv[])
   // Flush std output
   fflush(stdout);
 
-  printf("Starting up...\nResetting NCP target...\n");
+  printf("Host Starting up...\nResetting NCP target...\n");
 
   /* Reset NCP to ensure it gets into a defined state.
    * Once the chip successfully boots, gecko_evt_system_boot_id event should be received. */
   gecko_cmd_system_reset(0);
+
+  printf("NCP device Reset...\n");
 
   while (1) {
     /* Check for stack event. */
