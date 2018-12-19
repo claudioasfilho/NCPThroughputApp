@@ -79,6 +79,9 @@ const uint8_t serviceUUID[] = {
 /* SLAVE SIDE MACROS */
 #define NOTIFICATIONS_START				(uint32)(1 << 0)  	// Bit flag to external signal command
 #define NOTIFICATIONS_END				(uint32)(1 << 1)	// Bit flag to external signal command
+#define NOTIFICATIONS_TEST_STARTED				(uint32)(0x1000)  	// Bit flag to external signal command
+#define NOTIFICATIONS_TEST_FINISHED				(uint32)(0x2000)  	// Bit flag to external signal command
+#define NOTIFICATIONS_TEST_INTERVAL 10 							//In seconds
 #define INDICATIONS_START				(uint32)(1 << 2)	// Bit flag to external signal command
 #define INDICATIONS_END					(uint32)(1 << 3)	// Bit flag to external signal command
 #define ADV_INTERVAL_MAX				160					// 160 * 0.625us = 100ms
@@ -175,13 +178,16 @@ char* indicateString = (char*)indicateDisabledString;
 // App booted flag
 static bool appBooted = false;
 static bool Scanning = false;
+static bool Testing = false;
+static uint32 updateCounter;
+static uint32 SMState = 0;
 
 /**************************************************************************//**
 * @brief Routine to refresh the info on the display based on the Bluetooth link status
 *****************************************************************************/
 void displayRefresh()
 {
-	static uint32 counter;
+
 
 	//GRAPHICS_Clear();
 
@@ -204,7 +210,7 @@ void displayRefresh()
 			throughputString[13] = 'p';
 			throughputString[14] = 's';
 		printf("%s\n",throughputString);
-			printf("Counter: %d\n", counter++ );
+			printf("Counter: %d\n", updateCounter++ );
 
 		//sprintf(operationCountString+5, "%09lu", operationCount);
 		printf("%s\n",operationCountString);
@@ -337,7 +343,7 @@ void dataTransmissionStart(void)
 	gecko_cmd_gatt_write_characteristic_value_without_response(connection, gattdb_display_refresh, 1, &displayRefreshOff);
 
 	/* Stop display refresh */
-	gecko_cmd_hardware_set_soft_timer(0, SOFT_TIMER_DISPLAY_REFRESH_HANDLE, 0);
+//	gecko_cmd_hardware_set_soft_timer(0, SOFT_TIMER_DISPLAY_REFRESH_HANDLE, 0);
 
 #ifdef USE_LED_FOR_DATA_SENDING_SIGNALING
 	/* Turn ON data LED */
@@ -366,6 +372,150 @@ void dataTransmissionEnd(void)
 	/* Calculate throughput */
 	throughput = (uint32_t)((float)bitsSent / (float)((float)time_elapsed / (float)32768));
 }
+
+void testStateMachine(void)
+{
+	static struct gecko_msg_system_get_counters_rsp_t *getCounters;
+	static uint8_t SMCounter=0;
+
+	if ((Scanning==0))
+	{
+		if ((SMState == 0) && (SMCounter==0))
+		{
+			SMState = NOTIFICATIONS_START;
+			Testing = true;
+			printf("Starting Notifications Test for %ds \n", NOTIFICATIONS_TEST_INTERVAL);
+		}
+		if ((SMState == NOTIFICATIONS_START) && (SMCounter==NOTIFICATIONS_TEST_INTERVAL)) SMState = NOTIFICATIONS_END;
+		if ((SMState == NOTIFICATIONS_END) && (SMCounter==0)) SMState = NOTIFICATIONS_TEST_FINISHED;
+	}
+
+if (Testing)
+	{
+		switch (SMState)
+	    	  {
+	    	  	  case NOTIFICATIONS_START:
+
+	    	  		 // dataTransmissionStart();
+	    	  		  sendNotifications = true;
+	    	  		  generate_data_notifications();
+	#if defined(SEND_FIXED_TRANSFER_COUNT)
+	    	  		  transferCount = 0;
+	#elif defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
+	#endif
+	    	  		  getCounters = gecko_cmd_system_get_counters(1);
+								SMState = NOTIFICATIONS_TEST_STARTED;
+	    	  		  break;
+
+							case NOTIFICATIONS_TEST_STARTED:
+								SMCounter++;
+							break;
+
+	    	  	  case NOTIFICATIONS_END:
+
+	#if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		 // dataTransmissionEnd();
+	    	  		  sendNotifications = false;
+	    	  		  getCounters = gecko_cmd_system_get_counters(1);
+								SMCounter=0;
+
+	#endif
+	    	  		  break;
+
+								case NOTIFICATIONS_TEST_FINISHED:
+									printf("Test Finished\n");
+									Testing = false;
+								break;
+
+
+	    	  	  case WRITE_NO_RESPONSE_START:
+	    	  		  //dataTransmissionStart();
+	    	  		  sendWriteNoResponse = true;
+	    	  		  generate_data_notifications();
+	#if defined(SEND_FIXED_TRANSFER_COUNT)
+	    	  		  transferCount = 0;
+	#elif defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
+	#endif
+	    	  		  break;
+
+	    	  	  case WRITE_NO_RESPONSE_END:
+	#if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		  //dataTransmissionEnd();
+	    	  		  sendWriteNoResponse = false;
+
+	#endif
+					  break;
+
+	    	  	  case INDICATIONS_START:
+
+	    	  		  //dataTransmissionStart();
+	    	  		  sendIndications = true;
+	#if defined(SEND_FIXED_TRANSFER_COUNT)
+	    	  		  transferCount = 0;
+	#elif defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
+	#endif
+	    	  		  if(indications_enabled)
+	    	  		  {
+	    	  			  generate_data_indications();
+	        	  		  while(gecko_cmd_gatt_server_send_characteristic_notification(connection, gattdb_throughput_indications, maxDataSizeIndications, throughput_array_indications)->result != 0);
+	    	  		  }
+	    	  		  break;
+
+	    	  	  case INDICATIONS_END:
+
+	#if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
+	    	  		  //dataTransmissionEnd();
+	    	  		  sendIndications = false;
+	#endif
+	    	  		  break;
+
+	    	  	  case PHY_CHANGE:
+	    	  		  switch(phyInUse) {
+										    	  		  case PHY_1M:
+
+										    	  			  /* We're on 1M PHY, go to 2M PHY - only supported by xG12 and xG13 */
+										    	  			  phyToUse = PHY_2M;
+										    	  			  /* Change connection parameters for 2MPHY */
+
+										    	  			  break;
+
+										    	  		  case PHY_2M:
+
+										    	  			  /* We're on 2M PHY, go to 125kbit Coded PHY (S=8) - only supported by xG13 */
+										    	  			  phyToUse = PHY_S8;
+										    	  			  /* Change connection parameters according to set_phy command description
+															   * in API Ref. Minimum connection interval for LE Coded PHY is 40ms */
+															  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_125KPHY_MIN, CONN_INTERVAL_125KPHY_MAX, SLAVE_LATENCY_125KPHY, SUPERVISION_TIMEOUT_125KPHY);
+															  /* We're on 2MPHY but with xG12, go back to 1M PHY */
+															  phyToUse = PHY_1M;
+															  /* Change connection parameters back to the minimum */
+															  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_1MPHY_MIN, CONN_INTERVAL_1MPHY_MAX, SLAVE_LATENCY_1MPHY, SUPERVISION_TIMEOUT_1MPHY);
+										    	  			  break;
+
+										    	  		  case PHY_S8:
+
+										    	  			  /* We're on S8 PHY, go back to 1M PHY */
+										    	  			  phyToUse = PHY_1M;
+										    	  			  /* Change connection parameters back to the minimum */
+										    	  			  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_1MPHY_MIN, CONN_INTERVAL_1MPHY_MAX, SLAVE_LATENCY_1MPHY, SUPERVISION_TIMEOUT_1MPHY);
+
+										    	  			  break;
+
+	    	  		  }
+	    	  		  break;
+								default:
+									break;
+					}
+				}
+
+
+
+}//testStateMachine
+
+
 
 /***********************************************************************************************//**
  *  \brief  Event handler function.
@@ -397,7 +547,6 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 #if 1
   if(notifications_enabled && sendNotifications)
      {
-    // 	evt = gecko_peek_event();
 
      	if(gecko_cmd_gatt_server_send_characteristic_notification(connection, gattdb_throughput_notifications, maxDataSizeNotifications, throughput_array_notifications)->result == 0)
  		{
@@ -417,7 +566,6 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 
      else if(sendWriteNoResponse)
      {
-     	//evt = gecko_peek_event();
 
      	if(gecko_cmd_gatt_write_characteristic_value_without_response(connection, gattdb_throughput_write_no_response, maxDataSizeNotifications, throughput_array_notifications)->result == 0)
  		{
@@ -434,11 +582,7 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
  		}
 
 	}// else if(sendWriteNoResponse)
-	else
-	{
-	 /* Check for stack event. */
-	// evt = gecko_wait_event();
- }
+
 	#endif
 
 
@@ -713,6 +857,8 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
 
             case gecko_evt_hardware_soft_timer_id:
 
+
+
           	  switch(evt->data.evt_hardware_soft_timer.handle)
           	  {
       			  case SOFT_TIMER_DISPLAY_REFRESH_HANDLE:
@@ -723,6 +869,9 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
       		    	  }
 
       		    	  displayRefresh();
+									testStateMachine();
+
+
 
       	    		  //bitsSent = 0;
       				  break;
@@ -864,118 +1013,8 @@ void appHandleEvents(struct gecko_cmd_packet *evt)
           		  gecko_cmd_le_connection_set_phy(connection, phyToUse);
           	  }
           	  break;
-
-            case gecko_evt_system_external_signal_id:
-
-          	  switch (evt->data.evt_system_external_signal.extsignals)
-          	  {
-          	  	  case NOTIFICATIONS_START:
-
-          	  		  dataTransmissionStart();
-          	  		  sendNotifications = true;
-          	  		  generate_data_notifications();
-      #if defined(SEND_FIXED_TRANSFER_COUNT)
-          	  		  transferCount = 0;
-      #elif defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
-      #endif
-          	  		  getCounters = gecko_cmd_system_get_counters(1);
-          	  		  break;
-
-          	  	  case NOTIFICATIONS_END:
-
-      #if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  dataTransmissionEnd();
-          	  		  sendNotifications = false;
-          	  		  getCounters = gecko_cmd_system_get_counters(1);
-
-      #endif
-          	  		  break;
-
-          	  	  case WRITE_NO_RESPONSE_START:
-          	  		  dataTransmissionStart();
-          	  		  sendWriteNoResponse = true;
-          	  		  generate_data_notifications();
-      #if defined(SEND_FIXED_TRANSFER_COUNT)
-          	  		  transferCount = 0;
-      #elif defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
-      #endif
-          	  		  break;
-
-          	  	  case WRITE_NO_RESPONSE_END:
-      #if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  dataTransmissionEnd();
-          	  		  sendWriteNoResponse = false;
-
-      #endif
-      				  break;
-
-          	  	  case INDICATIONS_START:
-
-          	  		  dataTransmissionStart();
-          	  		  sendIndications = true;
-      #if defined(SEND_FIXED_TRANSFER_COUNT)
-          	  		  transferCount = 0;
-      #elif defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  gecko_cmd_hardware_set_soft_timer(SEND_FIXED_TRANSFER_TIME, SOFT_TIMER_FIXED_TRANSFER_TIME_HANDLE, 1);
-      #endif
-          	  		  if(indications_enabled)
-          	  		  {
-          	  			  generate_data_indications();
-              	  		  while(gecko_cmd_gatt_server_send_characteristic_notification(connection, gattdb_throughput_indications, maxDataSizeIndications, throughput_array_indications)->result != 0);
-          	  		  }
-          	  		  break;
-
-          	  	  case INDICATIONS_END:
-
-      #if !defined(SEND_FIXED_TRANSFER_COUNT) && !defined(SEND_FIXED_TRANSFER_TIME)
-          	  		  dataTransmissionEnd();
-          	  		  sendIndications = false;
-      #endif
-          	  		  break;
-
-          	  	  case PHY_CHANGE:
-          	  		  switch(phyInUse) {
-          	  		  case PHY_1M:
-      #if defined(_SILICON_LABS_32B_SERIES_1_CONFIG_2) || defined(_SILICON_LABS_32B_SERIES_1_CONFIG_3)
-          	  			  /* We're on 1M PHY, go to 2M PHY - only supported by xG12 and xG13 */
-          	  			  phyToUse = PHY_2M;
-          	  			  /* Change connection parameters for 2MPHY */
-          	  			  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_2MPHY_MIN, CONN_INTERVAL_2MPHY_MAX, SLAVE_LATENCY_2MPHY, SUPERVISION_TIMEOUT_2MPHY);
-      #endif
-          	  			  break;
-
-          	  		  case PHY_2M:
-      #if defined(_SILICON_LABS_32B_SERIES_1_CONFIG_3)
-          	  			  /* We're on 2M PHY, go to 125kbit Coded PHY (S=8) - only supported by xG13 */
-          	  			  phyToUse = PHY_S8;
-          	  			  /* Change connection parameters according to set_phy command description
-      					   * in API Ref. Minimum connection interval for LE Coded PHY is 40ms */
-      					  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_125KPHY_MIN, CONN_INTERVAL_125KPHY_MAX, SLAVE_LATENCY_125KPHY, SUPERVISION_TIMEOUT_125KPHY);
-      #else
-      					  /* We're on 2MPHY but with xG12, go back to 1M PHY */
-      					  phyToUse = PHY_1M;
-      					  /* Change connection parameters back to the minimum */
-      					  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_1MPHY_MIN, CONN_INTERVAL_1MPHY_MAX, SLAVE_LATENCY_1MPHY, SUPERVISION_TIMEOUT_1MPHY);
-      #endif
-          	  			  break;
-
-          	  		  case PHY_S8:
-      #if defined(_SILICON_LABS_32B_SERIES_1_CONFIG_3)
-          	  			  /* We're on S8 PHY, go back to 1M PHY */
-          	  			  phyToUse = PHY_1M;
-          	  			  /* Change connection parameters back to the minimum */
-          	  			  gecko_cmd_le_connection_set_parameters(connection, CONN_INTERVAL_1MPHY_MIN, CONN_INTERVAL_1MPHY_MAX, SLAVE_LATENCY_1MPHY, SUPERVISION_TIMEOUT_1MPHY);
-      #endif
-          	  			  break;
-
-          	  		  default:
-          	  			  break;
-          	  		  }
-          	  		  break;
     default:
       break;
 		}
-  }
+
 }
